@@ -49,7 +49,6 @@ def get_specialized_methods_from_llm(action: str, all_methods:list)->list:
     
     resp = llm.invoke(prompt)
     content = json.loads(resp.text)
-    print("all ", all_methods, "selected ", content,action)
     return content if content else []
 
 def yahoo_finance(ticker_symbol:str, method_list:list) -> dict:
@@ -78,32 +77,53 @@ def yahoo_finance(ticker_symbol:str, method_list:list) -> dict:
 def display_stock_chart(ticker: str, yfi_output: dict) -> None:
     """Generate a stock chart based on historical data"""
     import streamlit as st
-    if "history" in yfi_output and not yfi_output["history"].empty:
-        history_df = yfi_output.get("history")
-        if history_df is not None and not history_df.empty:
-            close = history_df["Close"]
-            if close.empty:
-                return
-            ymin = float(close.min())
-            ymax = float(close.max())
-            yrange = ymax - ymin
-            pad = max(yrange * 0.02, ymax * 0.001, 1e-6)
-            y_domain = [ymin - pad, ymax + pad]
-            df = history_df.reset_index()
-            time_col = "Date" if "Date" in df.columns else "Datetime"  # yfinance uses one of these
-            spec = {
-                "mark": {"type": "line"},
-                "encoding": {
-                    "x": {"field": time_col, "type": "temporal"},
-                    "y": {
-                    "field": "Close",
-                    "type": "quantitative",
-                    "scale": {"domain": y_domain},
-                    },
-                },
-            }
-            st.subheader(f"{ticker} - Stock Performance")
-            st.vega_lite_chart(df[[time_col, "Close"]], spec, width="stretch")
+    history_df = yfi_output.get("history") if yfi_output else None
+
+    # If the fetched history is sparse, get a denser chart view.
+    if history_df is None or history_df.empty or len(history_df) < 60:
+        try:
+            history_df = yf.Ticker(ticker).history(period="6mo", interval="1d")
+        except Exception:
+            return
+
+    if history_df is None or history_df.empty or "Close" not in history_df.columns:
+        return
+
+    close = history_df["Close"].dropna()
+    if close.empty:
+        return
+
+    ymin = float(close.min())
+    ymax = float(close.max())
+    yrange = ymax - ymin
+    pad = max(yrange * 0.02, 1e-6)
+    y_domain = [ymin - pad, ymax + pad]
+
+    df = history_df.reset_index()
+    time_col = "Date" if "Date" in df.columns else "Datetime"  # yfinance uses one of these
+    if time_col not in df.columns:
+        return
+
+    spec = {
+        "width": 900,
+        "height": 420,
+        "mark": {"type": "line", "interpolate": "linear", "strokeWidth": 2},
+        "encoding": {
+            "x": {
+                "field": time_col,
+                "type": "temporal",
+                "axis": {"grid": True, "tickCount": 12, "labelAngle": 0},
+            },
+            "y": {
+                "field": "Close",
+                "type": "quantitative",
+                "scale": {"domain": y_domain, "nice": False},
+                "axis": {"grid": True, "tickCount": 8},
+            },
+        },
+    }
+    st.subheader(f"{ticker} - Stock Performance")
+    st.vega_lite_chart(df[[time_col, "Close"]], spec)
 
 def generate_final_response(history: list, yfi_output: dict) -> str:
     """Generate final LLM response with Yahoo Finance context."""
