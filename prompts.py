@@ -16,7 +16,7 @@ EXTRACT_ACTION_AND_TICKER_PROMPT = """
         {"ticker": "<symbol or null>", "action": "<description>"}
         Rules:
             - If a company name is mentioned (e.g., "Apple", "Tesla"), resolve it to the ticker symbol (e.g., AAPL, TSLA)
-            - If no stock is mentioned, set TICKER to null.
+            - If no stock is mentioned, set TICKER to null. Do not return string values like 'NONE' or 'None' for missing ticker.
             - For ACTION, describe what data is needed (e.g., "current price", "historical data", "company info")
     """
 
@@ -28,10 +28,10 @@ EXTRACT_RELEVANT_METHOD_PROMPT = """
     **Do not concern yourself with what ticker I want to perform this action on!**
     All in all, I only want you to look at the action, and evaluate which API method, which i will give you in the allowed methods, will best help you get info for the action!
     Example of a correct response:
-    ["history", "info", "get(\"currentPrice\")"]
+    ["history","get_earnings_history", "get_balance_sheet"]
+    Include the history with a timeframe of 5 days, unless it is specified with a different time frame.
+    Do not invent methods.
     If you cannot find any suitable method, return an empty array: [].
-    Always include the history with a timeframe of 5 days, unless it is specified with a different time frame.
 """
 
-methods =  ['get_actions', 'get_analyst_price_targets', 'get_balance_sheet', 'get_balancesheet', 'get_calendar', 'get_capital_gains', 'get_cash_flow', 'get_cashflow', 'get_dividends', 'get_earnings', 'get_earnings_dates',
-    'get_earnings_estimate', 'get_earnings_history', 'get_eps_revisions', 'get_eps_trend', 'get_fast_info', 'get_financials', 'get_funds_data', 'get_growth_estimates', 'get_history_metadata']
+methods =  ['get_actions', 'get_analyst_price_targets', 'get_balance_sheet', 'get_balancesheet', 'get_calendar', 'get_capital_gains', 'get_cash_flow', 'get_cashflow', 'get_dividends', 'get_earnings', 'get_earnings_dates', 'get_earnings_estimate', 'get_earnings_history', 'get_eps_revisions', 'get_eps_trend', 'get_fast_info', 'get_financials', 'get_funds_data', 'get_growth_estimates', 'get_history_metadata', 'get_income_stmt', 'get_incomestmt', 'get_info', 'get_insider_purchases', 'get_insider_roster_holders', 'get_insider_transactions', 'get_institutional_holders', 'get_isin', 'get_major_holders', 'get_mutualfund_holders', 'get_news', 'get_recommendations', 'get_recommendations_summary', 'get_revenue_estimate', 'get_sec_filings', 'get_shares', 'get_shares_full', 'get_splits', 'get_sustainability', 'get_upgrades_downgrades', 'history', 'live', 'option_chain']

@@ -54,11 +54,12 @@ def get_specialized_methods_from_llm(action: str, all_methods:list)->list:
 def yahoo_finance(ticker_symbol:str, method_list:list) -> dict:
     """For each method in method list, call the method and store in a dictionary defined as methodName:methodOutput"""
     output = dict()
-    if ticker_symbol != 'None':
+    if ticker_symbol and ticker_symbol is not None:
         ticker = yf.Ticker(ticker_symbol)
         for method_name in method_list:
             try:
                 if method_name.startswith("history"):
+                    print(method_name)
                     output["history"] = eval(f"ticker.{method_name}")
                     continue
                 if method_name not in methods:
@@ -80,11 +81,11 @@ def display_stock_chart(ticker: str, yfi_output: dict) -> None:
     history_df = yfi_output.get("history") if yfi_output else None
 
     # If the fetched history is sparse, get a denser chart view.
-    if history_df is None or history_df.empty or len(history_df) < 60:
-        try:
-            history_df = yf.Ticker(ticker).history(period="6mo", interval="1d")
-        except Exception:
-            return
+    #if history_df is None or history_df.empty or len(history_df) < 60:
+    #    try:
+    #        history_df = yf.Ticker(ticker).history(period="6mo", interval="1d")
+    #    except Exception:
+    #        return
 
     if history_df is None or history_df.empty or "Close" not in history_df.columns:
         return

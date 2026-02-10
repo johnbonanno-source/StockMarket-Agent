@@ -29,3 +29,6 @@ Thumbs.db
 # continue config
 .continue/agents/*.yaml
 AGENTS.md
+
+# Local notes
+suggestions.txt

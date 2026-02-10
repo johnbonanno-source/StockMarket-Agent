@@ -22,7 +22,7 @@ def main():
         with st.spinner("Thinking…"):
             ticker, action = get_ticker_and_action_from_query(user_text)
             yfi_output = None
-            if ticker and ticker != "NONE":
+            if ticker and ticker is not None:
                 yfi_methods = get_specialized_methods_from_llm(action, methods)
                 yfi_output = yahoo_finance(ticker, yfi_methods)
                 # plot the chart
