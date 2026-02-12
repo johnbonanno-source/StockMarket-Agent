@@ -57,9 +57,12 @@ def yahoo_finance(ticker_symbol:str, method_list:list) -> dict:
     if ticker_symbol and ticker_symbol is not None:
         ticker = yf.Ticker(ticker_symbol)
         for method_name in method_list:
+            print(method_name)
             try:
-                if method_name.startswith("history"):
-                    print(method_name)
+                if method_name == "history":
+                    output["history"] = ticker.history(period="5d", interval="1d")
+                    continue
+                if method_name.startswith("history("):
                     output["history"] = eval(f"ticker.{method_name}")
                     continue
                 if method_name not in methods:
@@ -79,6 +82,9 @@ def display_stock_chart(ticker: str, yfi_output: dict) -> None:
     """Generate a stock chart based on historical data"""
     import streamlit as st
     history_df = yfi_output.get("history") if yfi_output else None
+
+    if history_df is not None and not hasattr(history_df, "empty"):
+        return
 
     # If the fetched history is sparse, get a denser chart view.
     #if history_df is None or history_df.empty or len(history_df) < 60:
