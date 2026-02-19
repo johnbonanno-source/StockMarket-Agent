@@ -2,9 +2,9 @@ import yfinance as yf
 import os
 import re
 import json
-import inspect
 from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI
+import streamlit as st
 
 from prompts import methods, SYSTEM_PROMPT, EXTRACT_ACTION_AND_TICKER_PROMPT, EXTRACT_RELEVANT_METHOD_PROMPT
 
@@ -15,17 +15,6 @@ def get_llm() -> ChatGoogleGenerativeAI:
         api_key=os.environ.get("GEMINI_API_KEY"),   # Read API key from the environment.
     )
     return llm
-
-def getMethodsFromticker(ticker: str) -> list:
-    """Using the YFI api, check what methods can be called on a given ticker"""
-    t = yf.Ticker(ticker)
-    methods = []
-    for name, member in inspect.getmembers(type(t)):
-        if name.startswith("_"):
-            continue
-        if callable(member):
-            methods.append(name)
-    return sorted(m for m in methods)
 
 def get_ticker_and_action_from_query(user_text: str) -> tuple:
     """Extract a stock ticker and a action the user would like performed, based on their input query"""
@@ -45,8 +34,6 @@ def get_specialized_methods_from_llm(action: str, all_methods:list)->list:
     """Of all methods callable on a specific stock ticker, return which of these methods relate to the action requested by the user, in a list format"""
     llm = get_llm()
     prompt = [("system", EXTRACT_RELEVANT_METHOD_PROMPT), ("user", f"Action: {action}\nAllowed methods: {', '.join(all_methods)}")]    
-    
-    
     resp = llm.invoke(prompt)
     content = json.loads(resp.text)
     return content if content else []
@@ -59,33 +46,22 @@ def yahoo_finance(ticker_symbol:str, method_list:list) -> dict:
         for method_name in method_list:
             try:
                 if method_name.startswith("history"):
-                    print(method_name)
                     output["history"] = eval(f"ticker.{method_name}")
                     continue
-                if method_name not in methods:
-                    output[method_name] = "Skipped: Disallowed Method"
-                    continue
                 method = getattr(ticker, method_name, None)
-                if method is not None and callable(method):
-                    output[method_name] = method()
+                if method in methods and callable(method):
+                    if method_name != 'live' and not method_name.startswith("live("):
+                        output[method_name] = method()
                 else:
                     output[method_name] = "Skipped: Not callable"
-                
             except Exception as e:
                     output[method_name] = f"Error: {e}"
     return output
 
 def display_stock_chart(ticker: str, yfi_output: dict) -> None:
     """Generate a stock chart based on historical data"""
-    import streamlit as st
+   
     history_df = yfi_output.get("history") if yfi_output else None
-
-    # If the fetched history is sparse, get a denser chart view.
-    #if history_df is None or history_df.empty or len(history_df) < 60:
-    #    try:
-    #        history_df = yf.Ticker(ticker).history(period="6mo", interval="1d")
-    #    except Exception:
-    #        return
 
     if history_df is None or history_df.empty or "Close" not in history_df.columns:
         return

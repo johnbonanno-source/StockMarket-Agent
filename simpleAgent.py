@@ -3,7 +3,7 @@ from helper import get_ticker_and_action_from_query, get_specialized_methods_fro
 from prompts import methods
 
 def main():
-    st.title("Chatbot")
+    st.title("Stock Market Agent")
 
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -21,9 +21,11 @@ def main():
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             ticker, action = get_ticker_and_action_from_query(user_text)
+            print(ticker,action)
             yfi_output = None
             if ticker and ticker is not None:
                 yfi_methods = get_specialized_methods_from_llm(action, methods)
+                print(yfi_methods)
                 yfi_output = yahoo_finance(ticker, yfi_methods)
                 # plot the chart
                 display_stock_chart(ticker, yfi_output)
