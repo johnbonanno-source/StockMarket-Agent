@@ -2,12 +2,99 @@ import yfinance as yf
 import os
 import re
 import json
-import pandas as pd
 from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI
 import streamlit as st
 
 from prompts import methods, SYSTEM_PROMPT, EXTRACT_ACTION_AND_TICKER_PROMPT, EXTRACT_RELEVANT_METHOD_PROMPT
+
+COMPANY_ALIASES = {
+    "micron": "MU",
+    "apple": "AAPL",
+    "tesla": "TSLA",
+    "nvidia": "NVDA",
+    "microsoft": "MSFT",
+    "amazon": "AMZN",
+    "meta": "META",
+    "google": "GOOGL",
+    "alphabet": "GOOGL",
+}
+LEADING_GREETING_RE = re.compile(
+    r"^\s*(?:hi|hello|hey|good morning|good afternoon)\b(?:[\s,!.?:;-]+|$)",
+    re.IGNORECASE,
+)
+EXPLICIT_TICKER_PATTERNS = (
+    re.compile(r"\$([A-Z]{1,5})\b"),
+    re.compile(r"\b(?:ticker|symbol)\s+([A-Z]{1,5})\b", re.IGNORECASE),
+)
+PERIOD_RULES = (
+    ("5d", ("today", "right now", "intraday", "this week", "weekly")),
+    ("1mo", ("this month", "monthly")),
+    ("1y", ("this year", "ytd")),
+)
+INTENT_METHOD_RULES = (
+    ("history", ("price", "stock", "doing", "performance", "trend", "chart")),
+    ("get_earnings_history", ("earnings",)),
+    ("get_news", ("news",)),
+)
+
+def _default_plan(user_text: str) -> dict:
+    return {"ticker": None, "action": user_text, "methods": [], "history": {"period": "5d"}}
+
+def _strip_leading_greeting(user_text: str) -> str:
+    return LEADING_GREETING_RE.sub("", user_text, count=1).strip()
+
+def _find_alias_matches(user_text: str) -> list[tuple[str, str]]:
+    matches = []
+    lowered = user_text.lower()
+    for company, ticker in COMPANY_ALIASES.items():
+        if re.search(rf"\b{re.escape(company)}\b", lowered):
+            matches.append((company, ticker))
+    return matches
+
+def _find_explicit_tickers(user_text: str) -> list[str]:
+    matches = []
+    for pattern in EXPLICIT_TICKER_PATTERNS:
+        matches.extend(match.group(1).upper() for match in pattern.finditer(user_text))
+    return matches
+
+def _choose_period(user_text: str) -> str:
+    lowered = user_text.lower()
+    for period, keywords in PERIOD_RULES:
+        if any(keyword in lowered for keyword in keywords):
+            return period
+    return "1mo"
+
+def _choose_methods(user_text: str) -> list[str]:
+    lowered = user_text.lower()
+    selected = []
+    for method_name, keywords in INTENT_METHOD_RULES:
+        if any(keyword in lowered for keyword in keywords):
+            selected.append(method_name)
+    return selected or ["history"]
+
+def try_fast_plan(user_text: str) -> dict | None:
+    cleaned_text = _strip_leading_greeting(user_text)
+    alias_matches = _find_alias_matches(cleaned_text)
+    explicit_tickers = _find_explicit_tickers(cleaned_text)
+
+    candidate_tickers = {ticker for _, ticker in alias_matches}
+    candidate_tickers.update(explicit_tickers)
+    if len(alias_matches) > 1 or len(explicit_tickers) > 1 or len(candidate_tickers) != 1:
+        return None
+
+    ticker = next(iter(candidate_tickers), None)
+    if not ticker:
+        return None
+
+    plan = {
+        "ticker": ticker,
+        "action": user_text,
+        "methods": _choose_methods(cleaned_text),
+        "history": {"period": _choose_period(cleaned_text)},
+    }
+    print(f"[DEBUG] try_fast_plan matched | plan={plan}")
+    return plan
 
 @lru_cache(maxsize=1)
 def get_llm() -> ChatGoogleGenerativeAI:
@@ -21,15 +108,18 @@ def get_llm() -> ChatGoogleGenerativeAI:
 def get_ticker_and_action_from_query(user_text: str) -> dict:
     """Extract stock request plan from user query."""
     print(f"[DEBUG] get_ticker_and_action_from_query called | user_text={user_text!r}")
+    fast_plan = try_fast_plan(user_text)
+    if fast_plan is not None:
+        return fast_plan
     llm = get_llm()
     prompt = [("system", EXTRACT_ACTION_AND_TICKER_PROMPT), ("user", user_text)]
     resp = llm.invoke(prompt)
     try:
         content = json.loads(resp.text.strip())
     except json.JSONDecodeError:
-        return {"ticker": None, "action": user_text, "methods": [], "history": {"period": "5d"}}
+        return _default_plan(user_text)
     if not isinstance(content, dict):
-        return {"ticker": None, "action": user_text, "methods": [], "history": {"period": "5d"}}
+        return _default_plan(user_text)
 
     content.setdefault("ticker", None)
     content.setdefault("action", user_text)
@@ -50,8 +140,11 @@ def get_specialized_methods_from_llm(action: str, all_methods:list)->list:
     llm = get_llm()
     prompt = [("system", EXTRACT_RELEVANT_METHOD_PROMPT), ("user", f"Action: {action}\nAllowed methods: {', '.join(all_methods)}")]    
     resp = llm.invoke(prompt)
-    content = json.loads(resp.text)
-    return content if content else []
+    try:
+        content = json.loads(resp.text)
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    return content if isinstance(content, list) else []
 
 def choose_interval(period: str) -> str:
     p = (period or "5d").lower().strip()
@@ -60,6 +153,7 @@ def choose_interval(period: str) -> str:
         return "1d"
     return "1h"
 
+@st.cache_data(ttl=60)
 def yahoo_finance(ticker_symbol: str, method_list: list, history_cfg: dict | None = None) -> dict:
     """For each method in method list, call the method and store in a dictionary defined as methodName:methodOutput"""
     print(
@@ -71,7 +165,7 @@ def yahoo_finance(ticker_symbol: str, method_list: list, history_cfg: dict | Non
     history_period = history_cfg.get("period", "5d")
     history_interval = choose_interval(history_period)
 
-    if ticker_symbol and ticker_symbol is not None:
+    if ticker_symbol:
         ticker = yf.Ticker(ticker_symbol)
         for method_name in method_list:
             try:
@@ -97,76 +191,22 @@ def yahoo_finance(ticker_symbol: str, method_list: list, history_cfg: dict | Non
     return output
 
 def display_stock_chart(ticker: str, yfi_output: dict) -> None:
-    """Render stock close price over time (x=date, y=price)."""
-    print(f"[DEBUG] display_stock_chart called | ticker={ticker!r}, yfi_output_type={type(yfi_output).__name__}")
-
+    """Render stock close price over time."""
     history_df = yfi_output.get("history") if isinstance(yfi_output, dict) else None
-    if history_df is None or not hasattr(history_df, "columns") or "Close" not in history_df.columns:
+    if history_df is None or "Close" not in history_df.columns:
         return
-
-    df = history_df.reset_index()
-    time_col = "Date" if "Date" in df.columns else "Datetime"
-    if time_col not in df.columns:
-        return
-
-    plot_df = df[[time_col, "Close"]].copy()
-    plot_df[time_col] = pd.to_datetime(plot_df[time_col], errors="coerce")
-    plot_df["Close"] = pd.to_numeric(plot_df["Close"], errors="coerce")
-    plot_df = plot_df.dropna(subset=[time_col, "Close"]).sort_values(time_col)
-    if plot_df.empty:
-        return
-
-    close = plot_df["Close"]
-    ymin = float(close.min())
-    ymax = float(close.max())
-    pad = max((ymax - ymin) * 0.04, 1e-6)
-
-    spec = {
-        "width": 920,
-        "height": 460,
-        "layer": [
-            {
-                "mark": {"type": "line", "strokeWidth": 2.2, "color": "#0f766e"},
-                "encoding": {
-                    "x": {
-                        "field": time_col,
-                        "type": "temporal",
-                        "axis": {
-                            "title": "Date",
-                            "grid": False,
-                            "labelAngle": -25,
-                            "tickCount": 8,
-                            "format": "%Y-%m-%d %H:%M",
-                        },
-                    },
-                    "y": {
-                        "field": "Close",
-                        "type": "quantitative",
-                        "scale": {"domain": [ymin - pad, ymax + pad], "nice": False},
-                        "axis": {"title": "Close", "grid": True, "gridOpacity": 0.15, "tickCount": 6},
-                    },
-                },
-            },
-            {
-                "mark": {"type": "point", "size": 16, "filled": True, "color": "#0f766e", "opacity": 0.45},
-                "encoding": {
-                    "x": {"field": time_col, "type": "temporal"},
-                    "y": {"field": "Close", "type": "quantitative"},
-                },
-            },
-        ],
-    }
 
     st.subheader(f"{ticker} - Stock Performance")
-    st.vega_lite_chart(plot_df, spec, use_container_width=True)
+    st.line_chart(history_df["Close"])
 
 def generate_final_response(history: list, yfi_output: dict) -> str:
     """Generate final LLM response with Yahoo Finance context."""
     print(f"[DEBUG] generate_final_response called | history_len={len(history)}, has_yfi_output={bool(yfi_output)}")
     llm = get_llm()
     messages = [("system", SYSTEM_PROMPT)] + history
+    
     if yfi_output:
-        messages.append(("system", f"Yahoo Finance tool output (JSON):\n{yfi_output}"))
+        messages.append(("system", f"Yahoo Finance tool output (JSON):\n{json.dumps(yfi_output, default=str, separators=(',', ':'))}"))
     resp = llm.invoke(messages)
     return re.sub(r'\*+', '', resp.text).strip()
 
@@ -181,5 +221,6 @@ def summarizeHistory(history: list) -> list:
         ("system", "Update the running conversation summary. Return ONLY the updated summary."),
         ("user", chunk),
     ]
-    remaining.append(("assistant",get_llm().invoke(prompt).text.strip()))
-    return remaining
+    summary = ("assistant", get_llm().invoke(prompt).text.strip())
+    return [summary, *remaining]
+

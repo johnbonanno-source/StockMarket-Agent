@@ -1,10 +1,9 @@
 streamlit
-langchain-ollama
+fastapi
+uvicorn
 python-dotenv
 yfinance
 lxml
 google-genai
 langchain-google-genai
-langchain
-langchain-community
 pypdf

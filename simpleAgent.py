@@ -25,11 +25,11 @@ def main():
             yfi_methods = request_plan.get("methods", [])
             history_cfg = request_plan.get("history", {})
             yfi_output = None
-            if ticker and ticker is not None:
+            if ticker:
                 if not yfi_methods:
                     yfi_methods = ["history"]
                 print(yfi_methods)
-                yfi_output = yahoo_finance(ticker, yfi_methods, history_cfg)
+                yfi_output = yahoo_finance(ticker, tuple(yfi_methods), history_cfg)
                 # plot the chart
                 display_stock_chart(ticker, yfi_output)
             resp = generate_final_response(st.session_state.history, yfi_output)
