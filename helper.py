@@ -193,7 +193,7 @@ def yahoo_finance(ticker_symbol: str, method_list: list, history_cfg: dict | Non
 def display_stock_chart(ticker: str, yfi_output: dict) -> None:
     """Render stock close price over time."""
     history_df = yfi_output.get("history") if isinstance(yfi_output, dict) else None
-    if history_df is None or "Close" not in history_df.columns:
+    if not hasattr(history_df, "columns") or "Close" not in history_df.columns:
         return
 
     st.subheader(f"{ticker} - Stock Performance")
@@ -223,4 +223,3 @@ def summarizeHistory(history: list) -> list:
     ]
     summary = ("assistant", get_llm().invoke(prompt).text.strip())
     return [summary, *remaining]
-
