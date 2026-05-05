@@ -153,8 +153,14 @@ def choose_interval(period: str) -> str:
         return "1d"
     return "1h"
 
+def make_cache_safe(value):
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError, RecursionError):
+        return str(value)
+
 @st.cache_data(ttl=60)
-def yahoo_finance(ticker_symbol: str, method_list: list, history_cfg: dict | None = None) -> dict:
+def yahoo_finance(ticker_symbol: str, method_list: tuple, history_cfg: dict | None = None) -> dict:
     """For each method in method list, call the method and store in a dictionary defined as methodName:methodOutput"""
     print(
         f"[DEBUG] yahoo_finance called | ticker_symbol={ticker_symbol!r}, "
@@ -183,7 +189,7 @@ def yahoo_finance(ticker_symbol: str, method_list: list, history_cfg: dict | Non
 
                 method = getattr(ticker, method_name, None)
                 if callable(method):
-                    output[method_name] = method()
+                    output[method_name] = make_cache_safe(method())
                 else:
                     output[method_name] = "Skipped: Not callable"
             except Exception as e:
