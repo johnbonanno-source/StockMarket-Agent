@@ -1,5 +1,5 @@
-import streamlit as st 
-from helper import get_ticker_and_action_from_query, yahoo_finance, display_stock_chart, generate_final_response, summarizeHistory
+import streamlit as st
+from helper import get_ticker_and_action_from_query, validate_or_resolve_ticker, yahoo_finance, display_stock_chart, generate_final_response, summarizeHistory
 
 def main():
     st.title("Stock Market Agent")
@@ -21,7 +21,13 @@ def main():
         with st.spinner("Thinking…"):
             request_plan = get_ticker_and_action_from_query(user_text)
             print(f"[DEBUG] request_plan={request_plan}")
-            ticker = request_plan.get("ticker")
+            ticker = None
+            if request_plan.get("ticker") or request_plan.get("company"):
+                ticker = validate_or_resolve_ticker(
+                    request_plan.get("ticker"),
+                    request_plan.get("company"),
+                    user_text,
+                )
             yfi_methods = request_plan.get("methods", [])
             history_cfg = request_plan.get("history", {})
             yfi_output = None

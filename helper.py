@@ -8,49 +8,13 @@ import streamlit as st
 
 from prompts import methods, SYSTEM_PROMPT, EXTRACT_ACTION_AND_TICKER_PROMPT, EXTRACT_RELEVANT_METHOD_PROMPT
 
-COMPANY_ALIASES = {
-    "micron": "MU",
-    "apple": "AAPL",
-    "tesla": "TSLA",
-    "nvidia": "NVDA",
-    "microsoft": "MSFT",
-    "amazon": "AMZN",
-    "meta": "META",
-    "google": "GOOGL",
-    "alphabet": "GOOGL",
-}
-LEADING_GREETING_RE = re.compile(
-    r"^\s*(?:hi|hello|hey|good morning|good afternoon)\b(?:[\s,!.?:;-]+|$)",
-    re.IGNORECASE,
-)
 EXPLICIT_TICKER_PATTERNS = (
     re.compile(r"\$([A-Z]{1,5})\b"),
     re.compile(r"\b(?:ticker|symbol)\s+([A-Z]{1,5})\b", re.IGNORECASE),
 )
-PERIOD_RULES = (
-    ("5d", ("today", "right now", "intraday", "this week", "weekly")),
-    ("1mo", ("this month", "monthly")),
-    ("1y", ("this year", "ytd")),
-)
-INTENT_METHOD_RULES = (
-    ("history", ("price", "stock", "doing", "performance", "trend", "chart")),
-    ("get_earnings_history", ("earnings",)),
-    ("get_news", ("news",)),
-)
 
 def _default_plan(user_text: str) -> dict:
-    return {"ticker": None, "action": user_text, "methods": [], "history": {"period": "5d"}}
-
-def _strip_leading_greeting(user_text: str) -> str:
-    return LEADING_GREETING_RE.sub("", user_text, count=1).strip()
-
-def _find_alias_matches(user_text: str) -> list[tuple[str, str]]:
-    matches = []
-    lowered = user_text.lower()
-    for company, ticker in COMPANY_ALIASES.items():
-        if re.search(rf"\b{re.escape(company)}\b", lowered):
-            matches.append((company, ticker))
-    return matches
+    return {"ticker": None, "company": None, "action": user_text, "methods": [], "history": {"period": "5d"}}
 
 def _find_explicit_tickers(user_text: str) -> list[str]:
     matches = []
@@ -58,42 +22,13 @@ def _find_explicit_tickers(user_text: str) -> list[str]:
         matches.extend(match.group(1).upper() for match in pattern.finditer(user_text))
     return matches
 
-def _choose_period(user_text: str) -> str:
-    lowered = user_text.lower()
-    for period, keywords in PERIOD_RULES:
-        if any(keyword in lowered for keyword in keywords):
-            return period
-    return "1mo"
+def _with_explicit_ticker_fallback(plan: dict, user_text: str) -> dict:
+    if plan.get("ticker"):
+        return plan
 
-def _choose_methods(user_text: str) -> list[str]:
-    lowered = user_text.lower()
-    selected = []
-    for method_name, keywords in INTENT_METHOD_RULES:
-        if any(keyword in lowered for keyword in keywords):
-            selected.append(method_name)
-    return selected or ["history"]
-
-def try_fast_plan(user_text: str) -> dict | None:
-    cleaned_text = _strip_leading_greeting(user_text)
-    alias_matches = _find_alias_matches(cleaned_text)
-    explicit_tickers = _find_explicit_tickers(cleaned_text)
-
-    candidate_tickers = {ticker for _, ticker in alias_matches}
-    candidate_tickers.update(explicit_tickers)
-    if len(alias_matches) > 1 or len(explicit_tickers) > 1 or len(candidate_tickers) != 1:
-        return None
-
-    ticker = next(iter(candidate_tickers), None)
-    if not ticker:
-        return None
-
-    plan = {
-        "ticker": ticker,
-        "action": user_text,
-        "methods": _choose_methods(cleaned_text),
-        "history": {"period": _choose_period(cleaned_text)},
-    }
-    print(f"[DEBUG] try_fast_plan matched | plan={plan}")
+    explicit_tickers = set(_find_explicit_tickers(user_text))
+    if len(explicit_tickers) == 1:
+        plan["ticker"] = next(iter(explicit_tickers))
     return plan
 
 @lru_cache(maxsize=1)
@@ -108,20 +43,18 @@ def get_llm() -> ChatGoogleGenerativeAI:
 def get_ticker_and_action_from_query(user_text: str) -> dict:
     """Extract stock request plan from user query."""
     print(f"[DEBUG] get_ticker_and_action_from_query called | user_text={user_text!r}")
-    fast_plan = try_fast_plan(user_text)
-    if fast_plan is not None:
-        return fast_plan
     llm = get_llm()
     prompt = [("system", EXTRACT_ACTION_AND_TICKER_PROMPT), ("user", user_text)]
     resp = llm.invoke(prompt)
     try:
         content = json.loads(resp.text.strip())
     except json.JSONDecodeError:
-        return _default_plan(user_text)
+        return _with_explicit_ticker_fallback(_default_plan(user_text), user_text)
     if not isinstance(content, dict):
-        return _default_plan(user_text)
+        return _with_explicit_ticker_fallback(_default_plan(user_text), user_text)
 
     content.setdefault("ticker", None)
+    content.setdefault("company", None)
     content.setdefault("action", user_text)
     content.setdefault("methods", [])
     content.setdefault("history", {})
@@ -131,7 +64,49 @@ def get_ticker_and_action_from_query(user_text: str) -> dict:
     if not isinstance(content["history"], dict):
         content["history"] = {}
     content["history"].setdefault("period", "5d")
-    return content
+    return _with_explicit_ticker_fallback(content, user_text)
+
+@st.cache_data(ttl=60)
+def has_market_data(ticker_symbol: str) -> bool:
+    try:
+        return not yf.Ticker(ticker_symbol).history(period="5d").empty
+    except Exception:
+        return False
+
+@st.cache_data(ttl=300)
+def resolve_ticker(query: str) -> str | None:
+    try:
+        search = yf.Search(
+            query,
+            max_results=6,
+            news_count=0,
+            lists_count=0,
+            include_cb=False,
+            timeout=10,
+            raise_errors=False,
+        )
+    except Exception:
+        return None
+
+    for quote in getattr(search, "quotes", []):
+        symbol = quote.get("symbol")
+        quote_type = quote.get("quoteType")
+        if symbol and quote_type in {"EQUITY", "ETF"} and has_market_data(symbol):
+            return symbol
+    return None
+
+def validate_or_resolve_ticker(ticker_symbol: str | None, search_query: str | None, user_text: str) -> str | None:
+    explicit_tickers = set(_find_explicit_tickers(user_text))
+    if ticker_symbol and ticker_symbol in explicit_tickers and has_market_data(ticker_symbol):
+        return ticker_symbol
+
+    resolved_ticker = resolve_ticker(search_query or user_text)
+    if resolved_ticker:
+        return resolved_ticker
+
+    if ticker_symbol and not search_query and has_market_data(ticker_symbol):
+        return ticker_symbol
+    return None
 
 
 def get_specialized_methods_from_llm(action: str, all_methods:list)->list:

@@ -1,5 +1,6 @@
 SYSTEM_PROMPT = """You are a concise stock market assistant. Return plain text only — no Markdown, no asterisks, no newlines.
 Use the Yahoo Finance JSON data provided to answer financial questions accurately.
+Do not say a company is delisted, acquired, private, or no longer traded unless the Yahoo Finance data explicitly supports that.
 End every response with a short follow-up question on the same line."""
 
 EXTRACT_ACTION_AND_TICKER_PROMPT = """
@@ -7,13 +8,16 @@ EXTRACT_ACTION_AND_TICKER_PROMPT = """
     Return ONLY valid JSON (no markdown, no prose) with this exact shape:
     {
     "ticker": "<symbol or null>",
+    "company": "<company name or null>",
     "action": "<short description>",
     "methods": ["<method1>", "<method2>"],
     "history": {"period": "<period>"}
     }
 
     Rules:
-    - Resolve company names to tickers (Apple -> AAPL, Micron -> MU, etc).
+    - Extract the company name the user asked about, if any.
+    - For follow-up replies that do not name a new company or ticker, set "ticker" and "company" to null so the app can answer from prior conversation context.
+    - Return a ticker only when you are confident; otherwise set "ticker" to null.
     - If no stock is mentioned, set "ticker" to null.
     - Keep "methods" from the allowed method names only.
     - Include "history" in methods when the user asks about price movement/performance/trend.
