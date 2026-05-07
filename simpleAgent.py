@@ -6,6 +6,8 @@ def main():
 
     if "history" not in st.session_state:
         st.session_state.history = []
+    if "last_ticker" not in st.session_state:
+        st.session_state.last_ticker = None
     if len(st.session_state.history) >= 20:
         st.session_state.history = summarizeHistory(st.session_state.history)
 
@@ -31,7 +33,10 @@ def main():
             yfi_methods = request_plan.get("methods", [])
             history_cfg = request_plan.get("history", {})
             yfi_output = None
+            if not ticker and yfi_methods:
+                ticker = st.session_state.last_ticker
             if ticker:
+                st.session_state.last_ticker = ticker
                 if not yfi_methods:
                     yfi_methods = ["history"]
                 print(yfi_methods)

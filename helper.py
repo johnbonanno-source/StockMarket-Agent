@@ -5,6 +5,7 @@ import json
 from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI
 import streamlit as st
+import altair as alt
 
 from prompts import methods, SYSTEM_PROMPT, EXTRACT_ACTION_AND_TICKER_PROMPT, EXTRACT_RELEVANT_METHOD_PROMPT
 
@@ -12,6 +13,18 @@ EXPLICIT_TICKER_PATTERNS = (
     re.compile(r"\$([A-Z]{1,5})\b"),
     re.compile(r"\b(?:ticker|symbol)\s+([A-Z]{1,5})\b", re.IGNORECASE),
 )
+QUOTE_TYPE_PRIORITY = {"EQUITY": 0, "ETF": 1, "INDEX": 2}
+US_EXCHANGES = {"NMS", "NYQ", "NGM"}
+MAJOR_INDEX_ALIASES = {
+    "s&p 500": "^GSPC",
+    "s&p": "^GSPC",
+    "sp500": "^GSPC",
+    "dow jones": "^DJI",
+    "dow": "^DJI",
+    "nasdaq composite": "^IXIC",
+    "nasdaq": "^IXIC",
+    "russell 2000": "^RUT",
+}
 
 def _default_plan(user_text: str) -> dict:
     return {"ticker": None, "company": None, "action": user_text, "methods": [], "history": {"period": "5d"}}
@@ -30,6 +43,21 @@ def _with_explicit_ticker_fallback(plan: dict, user_text: str) -> dict:
     if len(explicit_tickers) == 1:
         plan["ticker"] = next(iter(explicit_tickers))
     return plan
+
+def _quote_rank(quote: dict) -> tuple:
+    symbol = quote.get("symbol", "")
+    return (
+        QUOTE_TYPE_PRIORITY.get(quote.get("quoteType"), 99),
+        "." in symbol,
+        quote.get("exchange") not in US_EXCHANGES,
+    )
+
+def resolve_major_index(query: str) -> str | None:
+    q = query.lower()
+    for name, symbol in MAJOR_INDEX_ALIASES.items():
+        if name in q and has_market_data(symbol):
+            return symbol
+    return None
 
 @lru_cache(maxsize=1)
 def get_llm() -> ChatGoogleGenerativeAI:
@@ -75,6 +103,10 @@ def has_market_data(ticker_symbol: str) -> bool:
 
 @st.cache_data(ttl=300)
 def resolve_ticker(query: str) -> str | None:
+    major_index = resolve_major_index(query)
+    if major_index:
+        return major_index
+
     try:
         search = yf.Search(
             query,
@@ -88,10 +120,11 @@ def resolve_ticker(query: str) -> str | None:
     except Exception:
         return None
 
-    for quote in getattr(search, "quotes", []):
+    quotes = sorted(getattr(search, "quotes", []), key=_quote_rank)
+    for quote in quotes:
         symbol = quote.get("symbol")
         quote_type = quote.get("quoteType")
-        if symbol and quote_type in {"EQUITY", "ETF"} and has_market_data(symbol):
+        if symbol and quote_type in QUOTE_TYPE_PRIORITY and has_market_data(symbol):
             return symbol
     return None
 
@@ -123,10 +156,13 @@ def get_specialized_methods_from_llm(action: str, all_methods:list)->list:
 
 def choose_interval(period: str) -> str:
     p = (period or "5d").lower().strip()
-    # Yahoo intraday intervals are only available for limited lookback windows.
+    if p == "1d":
+        return "5m"
+    if p == "5d":
+        return "30m"
     if p.endswith("y") or p.endswith("mo"):
         return "1d"
-    return "1h"
+    return "1d"
 
 def make_cache_safe(value):
     try:
@@ -177,8 +213,20 @@ def display_stock_chart(ticker: str, yfi_output: dict) -> None:
     if not hasattr(history_df, "columns") or "Close" not in history_df.columns:
         return
 
+    close = history_df["Close"].dropna()
+    if close.empty:
+        return
+
+    padding = max((close.max() - close.min()) * 0.15, close.mean() * 0.002)
+    chart_df = close.reset_index()
+    chart_df.columns = ["Date", "Close"]
+    chart = alt.Chart(chart_df).mark_line().encode(
+        x="Date:T",
+        y=alt.Y("Close:Q", scale=alt.Scale(domain=[close.min() - padding, close.max() + padding])),
+    )
+
     st.subheader(f"{ticker} - Stock Performance")
-    st.line_chart(history_df["Close"])
+    st.altair_chart(chart, use_container_width=True)
 
 def generate_final_response(history: list, yfi_output: dict) -> str:
     """Generate final LLM response with Yahoo Finance context."""
